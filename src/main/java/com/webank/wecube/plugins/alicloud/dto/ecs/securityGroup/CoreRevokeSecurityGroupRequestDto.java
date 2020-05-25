@@ -5,6 +5,7 @@ import com.webank.wecube.plugins.alicloud.common.PluginException;
 import com.webank.wecube.plugins.alicloud.dto.CoreRequestInputDto;
 import com.webank.wecube.plugins.alicloud.dto.ForkableDto;
 import com.webank.wecube.plugins.alicloud.dto.PluginSdkInputBridge;
+import com.webank.wecube.plugins.alicloud.service.ecs.securityGroup.IpProtocol;
 import com.webank.wecube.plugins.alicloud.service.ecs.securityGroup.SecurityGroupServiceImpl;
 import com.webank.wecube.plugins.alicloud.utils.PluginStringUtils;
 import org.apache.commons.lang3.EnumUtils;
@@ -264,38 +265,41 @@ public class CoreRevokeSecurityGroupRequestDto extends CoreRequestInputDto imple
 
     @Override
     public void adaptToAliCloud() {
-        if (!StringUtils.isEmpty(this.getPortRange())) {
-            if (StringUtils.containsAny(this.getPortRange(), CORE_PORT_RANGE_DELIMITER, ALICLOUD_PORT_RANGE_DELIMITER)) {
-                this.setPortRange(this.getPortRange().replace(CORE_PORT_RANGE_DELIMITER, ALICLOUD_PORT_RANGE_DELIMITER));
+        if (StringUtils.isNotEmpty(portRange)) {
+            if (StringUtils.containsAny(portRange, CORE_PORT_RANGE_DELIMITER, ALICLOUD_PORT_RANGE_DELIMITER)) {
+                portRange = portRange.replace(CORE_PORT_RANGE_DELIMITER, ALICLOUD_PORT_RANGE_DELIMITER);
             } else {
-                this.setPortRange(this.getPortRange().concat(ALICLOUD_PORT_RANGE_DELIMITER).concat(this.getPortRange()));
+                portRange = portRange.concat(ALICLOUD_PORT_RANGE_DELIMITER).concat(portRange);
             }
         }
 
-        if (!StringUtils.isEmpty(this.getIpProtocol())) {
-            this.setIpProtocol(this.getIpProtocol().toLowerCase());
+        if (StringUtils.isNotEmpty(ipProtocol)) {
+            ipProtocol = ipProtocol.toLowerCase();
+            if (StringUtils.equals(ipProtocol, IpProtocol.icmp.toString())) {
+                portRange = "-1/-1";
+            }
         }
 
-        if (!StringUtils.isEmpty(this.getPolicy())) {
-            this.setPolicy(this.getPolicy().toLowerCase());
+        if (StringUtils.isNotEmpty(policy)) {
+            policy = policy.toLowerCase();
         }
 
-        if (!StringUtils.isEmpty(this.getCidrIp())) {
+        if (StringUtils.isNotEmpty(cidrIp)) {
 
-            String transferred = PluginStringUtils.handleCidrListString(this.getCidrIp());
+            String transferred = PluginStringUtils.handleCidrListString(cidrIp);
 
-            final SecurityGroupServiceImpl.PolicyType policyType = EnumUtils.getEnumIgnoreCase(SecurityGroupServiceImpl.PolicyType.class, this.getPolicyType());
+            final SecurityGroupServiceImpl.PolicyType policyType = EnumUtils.getEnumIgnoreCase(SecurityGroupServiceImpl.PolicyType.class, getPolicyType());
             if (null == policyType) {
                 throw new PluginException("Invalid policyType");
             } else {
                 switch (policyType) {
                     case EGRESS:
-                        this.setDestCidrIp(transferred);
-                        this.setSourceCidrIp(null);
+                        destCidrIp = transferred;
+                        sourceCidrIp = null;
                         break;
                     case INGRESS:
-                        this.setSourceCidrIp(transferred);
-                        this.setDestCidrIp(null);
+                        sourceCidrIp = transferred;
+                        destCidrIp = null;
                         break;
                     default:
                         break;
