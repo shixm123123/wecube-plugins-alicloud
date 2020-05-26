@@ -3,6 +3,7 @@ package com.webank.wecube.plugins.alicloud.service.vpc.nat;
 import com.aliyuncs.IAcsClient;
 import com.aliyuncs.vpc.model.v20160428.*;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
 import com.webank.wecube.plugins.alicloud.common.PluginException;
 import com.webank.wecube.plugins.alicloud.dto.CoreResponseDto;
 import com.webank.wecube.plugins.alicloud.dto.IdentityParamDto;
@@ -22,8 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -225,18 +225,12 @@ public class NatGatewayServiceImpl implements NatGatewayService {
                 final String regionId = cloudParamDto.getRegionId();
 
                 // find snat ips from entry id
-                final String[] ips = retrieveSnatIpsFromEntryId(requestDto, client, regionId);
+                String[] ips = retrieveSnatIpsFromEntryId(requestDto, client, regionId);
 
-                DeleteSnatEntryRequest request = requestDto.toSdk();
-                DeleteSnatEntryResponse response = this.acsClientStub.request(client, request, regionId);
-                result = result.fromSdk(response);
-
-                // wait till snat entry has been deleted
-                Function<?, Boolean> func = o -> ifSnatEntryHasBeenDeleted(client, regionId, requestDto.getSnatTableId(), requestDto.getSnatEntryId());
-                PluginTimer.runTask(new PluginTimerTask(func));
+                result = deleteSnatEntry(requestDto, result, client, regionId);
 
                 // unbind snat ip from nat
-                eipService.unbindIpFromInstance(client, regionId, requestDto.getNatId(), AssociatedInstanceType.Nat, ips);
+                unbindSnatIpFromNat(requestDto, client, regionId, ips);
 
             } catch (PluginException | AliCloudException ex) {
                 result.setErrorCode(CoreResponseDto.STATUS_ERROR);
@@ -449,5 +443,45 @@ public class NatGatewayServiceImpl implements NatGatewayService {
     private List<String> retrieveCurrentSnatIpList(IAcsClient client, String regionId, String snatTableId, String snatEntryId) {
         final DescribeSnatTableEntriesResponse.SnatTableEntry foundEntry = retrieveSnatEntryByEntryId(client, regionId, snatTableId, snatEntryId);
         return Lists.newArrayList(foundEntry.getSnatIp().split(","));
+    }
+
+    private Set<String> queryAllSnatIps(IAcsClient client, String regionId, String snatTableId) throws PluginException, AliCloudException {
+        DescribeSnatTableEntriesRequest request = new DescribeSnatTableEntriesRequest();
+        request.setSnatTableId(snatTableId);
+
+        final DescribeSnatTableEntriesResponse response = acsClientStub.request(client, request, regionId);
+        Set<String> result = new HashSet<>();
+        if (!response.getSnatTableEntries().isEmpty()) {
+            for (DescribeSnatTableEntriesResponse.SnatTableEntry snatTableEntry : response.getSnatTableEntries()) {
+                result.addAll(Sets.newHashSet(snatTableEntry.getSnatIp().split(",")));
+            }
+        }
+        return result;
+    }
+
+    private void unbindSnatIpFromNat(CoreDeleteSnatEntryRequestDto requestDto, IAcsClient client, String regionId, String[] ips) {
+
+        logger.info("Unbind SNAT ip from NAT gateway...");
+
+        final Set<String> targetIpSet = Sets.newHashSet(ips);
+        final Set<String> allIpSet = queryAllSnatIps(client, regionId, requestDto.getSnatTableId());
+        targetIpSet.removeAll(allIpSet);
+        ips = targetIpSet.toArray(new String[0]);
+
+        logger.info(String.format("Found ips that need to be un-bound from NAT gateway: [%s]", Arrays.toString(ips)));
+        eipService.unbindIpFromInstance(client, regionId, requestDto.getNatId(), AssociatedInstanceType.Nat, ips);
+    }
+
+    private CoreDeleteSnatEntryResponseDto deleteSnatEntry(CoreDeleteSnatEntryRequestDto requestDto, CoreDeleteSnatEntryResponseDto result, IAcsClient client, String regionId) {
+        logger.info("Deleting SNAT entry...");
+
+        DeleteSnatEntryRequest request = requestDto.toSdk();
+        DeleteSnatEntryResponse response = this.acsClientStub.request(client, request, regionId);
+        result = result.fromSdk(response);
+
+        // wait till snat entry has been deleted
+        Function<?, Boolean> func = o -> ifSnatEntryHasBeenDeleted(client, regionId, requestDto.getSnatTableId(), requestDto.getSnatEntryId());
+        PluginTimer.runTask(new PluginTimerTask(func));
+        return result;
     }
 }
