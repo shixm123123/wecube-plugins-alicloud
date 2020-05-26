@@ -191,6 +191,9 @@ public class EipServiceImpl implements EipService {
 
         // if there is no EIP bound, delete CBP
         if (cbp.getPublicIpAddresses().isEmpty()) {
+
+            logger.info("Deleting CBP...");
+
             DeleteCommonBandwidthPackageRequest deleteRequest = new DeleteCommonBandwidthPackageRequest();
             deleteRequest.setBandwidthPackageId(foundCBPId);
             acsClientStub.request(client, deleteRequest, regionId);
