@@ -69,6 +69,9 @@ public class EipServiceImpl implements EipService {
                 AllocateEipAddressRequest allocateEipAddressRequest = requestDto.toSdk();
                 AllocateEipAddressResponse createEipResponse = this.acsClientStub.request(client, allocateEipAddressRequest);
 
+                // wait till EIP as allocated and available
+                checkIfEipAvailable(client, regionId, createEipResponse.getAllocationId());
+
                 // if cbpName is empty, create CBP
                 String cbpId = StringUtils.EMPTY;
                 if (!StringUtils.isEmpty(requestDto.getName())) {
@@ -105,6 +108,11 @@ public class EipServiceImpl implements EipService {
 
         }
         return resultList;
+    }
+
+    public void checkIfEipAvailable(IAcsClient client, String regionId, String allocationId) throws PluginException, AliCloudException {
+        Function<?, Boolean> func = o -> ifEipInStatus(client, regionId, allocationId, EipStatus.Available);
+        PluginTimer.runTask(new PluginTimerTask(func));
     }
 
 
@@ -144,6 +152,9 @@ public class EipServiceImpl implements EipService {
                     removeFromCBP(client, requestDto.getAllocationId(), regionId, foundCBPId);
                 }
 
+                // release CBP if possible
+                releaseCBPIfPossible(client, regionId, foundCBPId);
+
                 // release eip
                 ReleaseEipAddressRequest request = requestDto.toSdk();
                 ReleaseEipAddressResponse response = this.acsClientStub.request(client, request, regionId);
@@ -164,6 +175,27 @@ public class EipServiceImpl implements EipService {
 
         }
         return resultList;
+    }
+
+    private void releaseCBPIfPossible(IAcsClient client, String regionId, String foundCBPId) throws PluginException, AliCloudException {
+        DescribeCommonBandwidthPackagesRequest request = new DescribeCommonBandwidthPackagesRequest();
+        request.setBandwidthPackageId(foundCBPId);
+
+        final DescribeCommonBandwidthPackagesResponse response = acsClientStub.request(client, request, regionId);
+
+        if (response.getCommonBandwidthPackages().isEmpty()) {
+            throw new PluginException(String.format("Cannot find CBP by given id: [%s]", foundCBPId));
+        }
+
+        final DescribeCommonBandwidthPackagesResponse.CommonBandwidthPackage cbp = response.getCommonBandwidthPackages().get(0);
+
+        // if there is no EIP bound, delete CBP
+        if (cbp.getPublicIpAddresses().isEmpty()) {
+            DeleteCommonBandwidthPackageRequest deleteRequest = new DeleteCommonBandwidthPackageRequest();
+            deleteRequest.setBandwidthPackageId(foundCBPId);
+            acsClientStub.request(client, deleteRequest, regionId);
+        }
+
     }
 
     private String queryCBPByEip(IAcsClient client, String regionId, String allocationId) throws PluginException, AliCloudException {
@@ -437,13 +469,13 @@ public class EipServiceImpl implements EipService {
         return response.getEipAddresses().get(0);
     }
 
-    private boolean ifEipInStatus(IAcsClient client, String regionId, String allocationId, EipStatus status) throws AliCloudException {
+    private boolean ifEipInStatus(IAcsClient client, String regionId, String allocationId, EipStatus status) throws PluginException, AliCloudException {
         final DescribeEipAddressesResponse response = retrieveEipByAllocationId(client, regionId, allocationId, false);
 
         return StringUtils.equals(status.toString(), response.getEipAddresses().get(0).getStatus());
     }
 
-    private boolean ifEipNotInStatus(IAcsClient client, String regionId, String allocationId, EipStatus status) throws AliCloudException {
+    private boolean ifEipNotInStatus(IAcsClient client, String regionId, String allocationId, EipStatus status) throws PluginException, AliCloudException {
         final DescribeEipAddressesResponse response = retrieveEipByAllocationId(client, regionId, allocationId, false);
 
         return !StringUtils.equals(status.toString(), response.getEipAddresses().get(0).getStatus());
